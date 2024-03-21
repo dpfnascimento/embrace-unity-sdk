@@ -1,4 +1,5 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -17,6 +18,7 @@ namespace EmbraceSDK.Demo
         public Toggle allowScreenshotToggle;
         public Slider slider;
         public PropertiesController propertiesController;
+        [SerializeField] private Sprite backupSpriteReference;
         public void Start()
         {
             cropButton.onClick.AddListener(HandleCropClick);
@@ -27,10 +29,23 @@ namespace EmbraceSDK.Demo
         public void HandleCropClick()
         {
             Embrace.Instance.StartMoment(DemoConstants.MOMENT_CROP_IMAGE);
-            Texture2D texture = image.sprite.texture;
-            texture = CropToCircle(texture.height, texture.width, texture.width / 2, texture.width / 2, texture.height / 2, texture);
-            image.sprite = Sprite.Create(texture, new Rect(0,0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100.0f);
-
+            try
+            {
+                Texture2D texture = image.sprite.texture;
+                texture = CropToCircle(texture.height, texture.width, texture.width / 2, texture.width / 2, texture.height / 2, texture);
+                image.sprite = Sprite.Create(texture, new Rect(0,0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100.0f);
+            }
+            catch (Exception exc)
+            {
+                image.sprite = backupSpriteReference;
+            }
+            finally
+            {
+                Texture2D texture = image.sprite.texture;
+                texture = CropToCircle(texture.height, texture.width, texture.width / 2, texture.width / 2, texture.height / 2, texture);
+                image.sprite = Sprite.Create(texture, new Rect(0,0, texture.width, texture.height), new Vector2(0.5f, 0.5f), 100.0f);
+            }
+            
             Embrace.Instance.EndMoment(DemoConstants.MOMENT_CROP_IMAGE);
         }
 
