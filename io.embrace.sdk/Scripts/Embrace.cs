@@ -16,15 +16,16 @@ namespace EmbraceSDK
 {
     public class Embrace : MonoBehaviour, IEmbraceUnityApi
     {
-        public IEmbraceProvider provider;
+        public IEmbraceProvider Provider;
+        
+        internal EmbraceLogHandler EmbraceLogHandler;
+        
         private static Embrace _instance;
-        private Thread _mainThread;
-        private bool _started;
         private static EmbraceSdkInfo sdkInfo;
-        private UnhandledExceptionRateLimiting rateLimiter = new UnhandledExceptionRateLimiting();
-        private Dictionary<string, string> emptyDictionary = new Dictionary<string, string>();
-
-        private EmbraceScenesToViewReporter scenesToViewReporter = null;
+        private bool _started;
+        private Dictionary<string, string> _emptyDictionary = new Dictionary<string, string>();
+        private EmbraceThreadService _threadService;
+        private EmbraceScenesToViewReporter _scenesToViewReporter;
 
         /// <inheritdoc />
         public bool IsStarted => _started;
@@ -59,7 +60,7 @@ namespace EmbraceSDK
         void OnApplicationPause(bool pauseStatus)
         {
             if (!pauseStatus) {
-                provider.InstallUnityThreadSampler();
+                Provider.InstallUnityThreadSampler();
 #if UNITY_ANDROID
                 // The behaviors of the native Android SDK and the native iOS SDK have been
                 // demonstrated to be different. Namely, the iOS SDK perpetuates the views
@@ -68,9 +69,9 @@ namespace EmbraceSDK
                 // capturing the Unity activity and possibly a test view label "a_view" as well.
                 // As a result, the StartView and EndView clauses here should forcibly capture
                 // the view information we need for this feature.
-                scenesToViewReporter?.StartViewFromScene(SceneManager.GetActiveScene());
+                _scenesToViewReporter?.StartViewFromScene(SceneManager.GetActiveScene());
                     
-                #if EMBRACE_ENABLE_BUGSHAKE_FORM
+#if EMBRACE_ENABLE_BUGSHAKE_FORM
                 // We should attempt to register the shake listener whenever the app is resumed
                 // Because the internal behavior of the Android SDK is such that it contains a ShakeListener singleton
                 // we will not cause issues by registering it multiple times.
@@ -80,7 +81,7 @@ namespace EmbraceSDK
             } else
             {
 #if UNITY_ANDROID
-                scenesToViewReporter?.EndViewFromScene(SceneManager.GetActiveScene());
+                _scenesToViewReporter?.EndViewFromScene(SceneManager.GetActiveScene());
 #endif
             }
         }
@@ -107,7 +108,7 @@ namespace EmbraceSDK
 
             TextAsset targetFile = Resources.Load<TextAsset>("Info/EmbraceSdkInfo");
             sdkInfo = JsonUtility.FromJson<EmbraceSdkInfo>(targetFile.text);
-            embraceInstance.provider = new Embrace_Stub();
+            embraceInstance.Provider = new Embrace_Stub();
             _instance = embraceInstance;
             
             InternalEmbrace.SetInternalInstance(_instance);
@@ -122,7 +123,11 @@ namespace EmbraceSDK
         {
             _instance = this;
 
-            _mainThread = Thread.CurrentThread;
+            // Set the main thread for the Embrace SDK
+            _threadService = new EmbraceThreadService(Thread.CurrentThread, EmbraceLogHandler);
+            
+            // Init the Embrace log handler
+            EmbraceLogHandler = new EmbraceLogHandler();
             
             TextAsset targetFile = Resources.Load<TextAsset>("Info/EmbraceSdkInfo");
             sdkInfo = JsonUtility.FromJson<EmbraceSdkInfo>(targetFile.text);
@@ -132,12 +137,11 @@ namespace EmbraceSDK
 #elif (UNITY_IOS || UNITY_TVOS) && !UNITY_EDITOR
             provider = new Embrace_iOS();
 #else
-            provider = new Embrace_Stub();
+            Provider = new Embrace_Stub();
 #endif
                 
-            #if UNITY_ANDROID && EMBRACE_ENABLE_BUGSHAKE_FORM
-            
-            #if EMBRACE_USE_BUGSHAKE_SCENE_MANAGER_OVERRIDE
+#if UNITY_ANDROID && EMBRACE_ENABLE_BUGSHAKE_FORM
+#if EMBRACE_USE_BUGSHAKE_SCENE_MANAGER_OVERRIDE
             if (SceneManagerAPI.overrideAPI == null)
             {
                 SceneManagerAPI.overrideAPI = new EmbraceSceneManagerOverride(
@@ -148,7 +152,7 @@ namespace EmbraceSDK
                 // The only ways to handle this are to either invoke reflection at runtime or use a weaver to capture the user's SceneManagerAPI override and weave into that.
                 EmbraceLogger.LogWarning("User requested to use the EmbraceSceneManagerOverride, but the override API is already set. EmbraceSceneManagerOverride assignment skipped.");
             }
-            #endif
+#endif
             
             // We should allow the user to configure if this is enabled or not by default.
             // For now we don't have a good way to allow the user to configure this setting.
@@ -157,9 +161,9 @@ namespace EmbraceSDK
             // As a result if the prefab is instantiated dynamically we have no good behavioral assumption.
             // For now we will enable this by default.
             BugshakeService.Instance.RegisterShakeListener();
-            #endif
+#endif
             
-            provider.InitializeSDK();
+            Provider.InitializeSDK();
         }
         
         // Called by Unity runtime
@@ -185,7 +189,7 @@ namespace EmbraceSDK
         // Called by Unity runtime
         private void OnDestroy()
         {
-            scenesToViewReporter?.Dispose();
+            _scenesToViewReporter?.Dispose();
         }
 
         /// <inheritdoc />
@@ -201,13 +205,13 @@ namespace EmbraceSDK
                 Initialize();
             }
 
-            provider.StartSDK(enableIntegrationTesting);
-            provider.SetMetaData(Application.unityVersion, Application.buildGUID, sdkInfo.version);
+            Provider.StartSDK(enableIntegrationTesting);
+            Provider.SetMetaData(Application.unityVersion, Application.buildGUID, sdkInfo.version);
 
             TimeUtil.Clean();
             TimeUtil.InitStopWatch();
 
-            Application.logMessageReceived += Embrace_Log_Handler;
+            Application.logMessageReceived += EmbraceLogHandler.HandleEmbraceLog;
 
             // Scene change registration here
 #if EMBRACE_AUTO_CAPTURE_ACTIVE_SCENE_AS_VIEW
@@ -219,7 +223,7 @@ namespace EmbraceSDK
             // If this directive is defined, the Embrace SDK will capture messages regardless of whether they
             // originate from the main thread or not.  For more details please see Unity documentation:
             // https://docs.unity3d.com/ScriptReference/Application-logMessageReceivedThreaded.html
-            Application.logMessageReceivedThreaded += Embrace_Threaded_Log_Handler;
+            Application.logMessageReceivedThreaded += _threadService.Embrace_Threaded_Log_Handler;
             Debug.LogWarning("THREADED LOGGING ENABLED");
 #endif
 
@@ -229,44 +233,13 @@ namespace EmbraceSDK
 
             EmbraceLogger.Log("Embrace SDK enabled. Version: " + sdkInfo.version);
         }
-
-        private bool IsMainThread()
-        {
-            if (_mainThread == null) return false;
-            return _mainThread.Equals(Thread.CurrentThread);
-        }
-
-#if EMBRACE_USE_THREADING
-        private void Embrace_Threaded_Log_Handler(string message, string stack, LogType type)
-        {
-            if (IsMainThread())
-            {
-                return;
-            }
-
-            Embrace_Log_Handler(message, stack, type);
-        }
-#endif
-
-        /// <summary>
-        /// Handles log messages of LogType.Exception and LogType.Assert. For internal use and testing only.
-        /// </summary>
-        /// <param name="message">Custom message that will be attached to this log.</param>
-        /// <param name="stack">Stack trace of the message origin</param>
-        /// <param name="type">Log type (see UnityEngine.LogType for more info)</param>
+        
         public void Embrace_Log_Handler(string message, string stack, LogType type)
         {
-            if (type == LogType.Exception || type == LogType.Assert)
-            {
-                UnhandledException ue = new UnhandledException(message, stack);
-                if (!rateLimiter.IsAllowed(ue))
-                {
-                    return;
-                }
-
-                (string splitName, string splitMessage) = UnhandledExceptionUtility.SplitConcatenatedExceptionNameAndMessage(message);
-                provider.LogUnhandledUnityException(splitName, splitMessage, stack);
-            }
+            EmbraceLogger.LogWarning("Warning: Embrace_Log_Handler is a deprecated API and " +
+                                     "will be removed in a future release.");
+            
+            EmbraceLogHandler.HandleEmbraceLog(message, stack, type);
         }
 
         /// <inheritdoc />
@@ -274,16 +247,16 @@ namespace EmbraceSDK
         {
             if (properties == null)
             {
-                properties = emptyDictionary;
+                properties = _emptyDictionary;
             }
 
-            provider.EndAppStartup(properties);
+            Provider.EndAppStartup(properties);
         }
 
         /// <inheritdoc />
         public LastRunEndState GetLastRunEndState()
         {
-            return IsStarted ? provider.GetLastRunEndState() : LastRunEndState.Invalid;
+            return IsStarted ? Provider.GetLastRunEndState() : LastRunEndState.Invalid;
         }
 
         /// <inheritdoc />
@@ -295,13 +268,13 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.SetUserIdentifier(identifier);
+            Provider.SetUserIdentifier(identifier);
         }
 
         /// <inheritdoc />
         public void ClearUserIdentifier()
         {
-            provider.ClearUserIdentifier();
+            Provider.ClearUserIdentifier();
         }
 
         /// <inheritdoc />
@@ -313,13 +286,13 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.SetUsername(username);
+            Provider.SetUsername(username);
         }
 
         /// <inheritdoc />
         public void ClearUsername()
         {
-            provider.ClearUsername();
+            Provider.ClearUsername();
         }
 
         /// <inheritdoc />
@@ -331,25 +304,25 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.SetUserEmail(email);
+            Provider.SetUserEmail(email);
         }
 
         /// <inheritdoc />
         public void ClearUserEmail()
         {
-            provider.ClearUserEmail();
+            Provider.ClearUserEmail();
         }
 
         /// <inheritdoc />
         public void SetUserAsPayer()
         {
-            provider.SetUserAsPayer();
+            Provider.SetUserAsPayer();
         }
 
         /// <inheritdoc />
         public void ClearUserAsPayer()
         {
-            provider.ClearUserAsPayer();
+            Provider.ClearUserAsPayer();
         }
 
         [System.Obsolete("Please use AddUserPersona() instead. This method will be removed in a future release.")]
@@ -367,7 +340,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.AddUserPersona(persona);
+            Provider.AddUserPersona(persona);
         }
 
         /// <inheritdoc />
@@ -379,13 +352,13 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.ClearUserPersona(persona);
+            Provider.ClearUserPersona(persona);
         }
 
         /// <inheritdoc />
         public void ClearAllUserPersonas()
         {
-            provider.ClearAllUserPersonas();
+            Provider.ClearAllUserPersonas();
         }
 
         /// <inheritdoc />
@@ -403,7 +376,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.AddSessionProperty(key, value, permanent);
+            Provider.AddSessionProperty(key, value, permanent);
         }
 
         /// <inheritdoc />
@@ -415,16 +388,16 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.RemoveSessionProperty(key);
+            Provider.RemoveSessionProperty(key);
         }
 
         /// <inheritdoc />
         public Dictionary<string, string> GetSessionProperties()
         {
-            var properties = provider.GetSessionProperties();
+            var properties = Provider.GetSessionProperties();
             if (properties == null)
             {
-                properties = emptyDictionary;
+                properties = _emptyDictionary;
             }
 
             return properties;
@@ -441,10 +414,10 @@ namespace EmbraceSDK
 
             if (properties == null)
             {
-                properties = emptyDictionary;
+                properties = _emptyDictionary;
             }
 
-            provider.StartMoment(name, identifier, allowScreenshot, properties);
+            Provider.StartMoment(name, identifier, allowScreenshot, properties);
         }
 
         /// <inheritdoc />
@@ -458,10 +431,10 @@ namespace EmbraceSDK
 
             if (properties == null)
             {
-                properties = emptyDictionary;
+                properties = _emptyDictionary;
             }
 
-            provider.EndMoment(name, identifier, properties);
+            Provider.EndMoment(name, identifier, properties);
         }
 
         /// <inheritdoc />
@@ -487,10 +460,10 @@ namespace EmbraceSDK
 
             if (properties == null)
             {
-                properties = emptyDictionary;
+                properties = _emptyDictionary;
             }
 
-            provider.LogMessage(message, severity, properties);
+            Provider.LogMessage(message, severity, properties);
         }
 
         /// <inheritdoc />
@@ -526,19 +499,19 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.AddBreadcrumb(message);
+            Provider.AddBreadcrumb(message);
         }
 
         /// <inheritdoc />
         public void EndSession(bool clearUserInfo = false)
         {
-            provider.EndSession(clearUserInfo);
+            Provider.EndSession(clearUserInfo);
         }
 
         /// <inheritdoc />
         public string GetDeviceId()
         {
-            return provider.GetDeviceId();
+            return Provider.GetDeviceId();
         }
 
         /// <inheritdoc />
@@ -550,7 +523,7 @@ namespace EmbraceSDK
                 return false;
             }
 
-            return provider.StartView(name);
+            return Provider.StartView(name);
         }
 
         /// <inheritdoc />
@@ -562,7 +535,7 @@ namespace EmbraceSDK
                 return false;
             }
 
-            return provider.EndView(name);
+            return Provider.EndView(name);
         }
 
         /// <summary>
@@ -571,7 +544,7 @@ namespace EmbraceSDK
         [System.Obsolete("This method will be removed in a future release.")]
         public void Crash()
         {
-            provider.Crash();
+            Provider.Crash();
         }
 
         /// <inheritdoc />
@@ -592,7 +565,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.RecordCompletedNetworkRequest(url, method, startms, endms, bytesin, bytesout, code);
+            Provider.RecordCompletedNetworkRequest(url, method, startms, endms, bytesin, bytesout, code);
         }
         
         /// <inheritdoc />
@@ -604,7 +577,7 @@ namespace EmbraceSDK
                 return;
             }
             
-            provider.RecordCompletedNetworkRequest(url, method, startms, endms, bytesin, bytesout, code);
+            Provider.RecordCompletedNetworkRequest(url, method, startms, endms, bytesin, bytesout, code);
         }
         
         /// <inheritdoc />
@@ -622,7 +595,7 @@ namespace EmbraceSDK
                 return;
             }
             
-            provider.RecordIncompleteNetworkRequest(url, method, startms, endms, error);
+            Provider.RecordIncompleteNetworkRequest(url, method, startms, endms, error);
         }
 
         /// <inheritdoc />
@@ -642,7 +615,7 @@ namespace EmbraceSDK
             }
 
             (string splitName, string splitMessage) = UnhandledExceptionUtility.SplitConcatenatedExceptionNameAndMessage(exceptionMessage);
-            provider.LogUnhandledUnityException(splitName, splitMessage, stack);
+            Provider.LogUnhandledUnityException(splitName, splitMessage, stack);
         }
 
         /// <inheritdoc />
@@ -654,7 +627,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.LogUnhandledUnityException(exceptionName, exceptionMessage ?? "", stack ?? "");
+            Provider.LogUnhandledUnityException(exceptionName, exceptionMessage ?? "", stack ?? "");
         }
 
         /// <inheritdoc />
@@ -666,7 +639,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.LogUnhandledUnityException(
+            Provider.LogUnhandledUnityException(
                 exceptionName: exception.GetType().Name,
                 exceptionMessage: exception.Message ?? "",
                 stack: stack ?? exception.StackTrace ?? "");
@@ -681,7 +654,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.LogHandledUnityException(exceptionName, exceptionMessage ?? "", stack ?? "");
+            Provider.LogHandledUnityException(exceptionName, exceptionMessage ?? "", stack ?? "");
         }
 
         /// <inheritdoc />
@@ -693,7 +666,7 @@ namespace EmbraceSDK
                 return;
             }
 
-            provider.LogHandledUnityException(
+            Provider.LogHandledUnityException(
                 exceptionName: exception.GetType().Name,
                 exceptionMessage: exception.Message ?? "",
                 stack: stack ?? exception.StackTrace ?? "");
@@ -702,7 +675,7 @@ namespace EmbraceSDK
         /// <inheritdoc />
         public string GetCurrentSessionId()
         {
-            return provider.GetCurrentSessionId();
+            return Provider.GetCurrentSessionId();
         }
 
         /// <inheritdoc />
@@ -719,7 +692,7 @@ namespace EmbraceSDK
         public void RecordPushNotification(AndroidPushNotificationArgs androidArgs)
         {
             #if UNITY_ANDROID
-            provider.RecordPushNotification(androidArgs);
+            Provider.RecordPushNotification(androidArgs);
             #else
             EmbraceLogger.LogError("Attempting to record Android push notification on non-Android platform");
             #endif
