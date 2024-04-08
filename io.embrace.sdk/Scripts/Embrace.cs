@@ -14,18 +14,18 @@ using EmbraceSDK.Bugshake;
 
 namespace EmbraceSDK
 {
-    public class Embrace : MonoBehaviour, IEmbraceUnityApi
+    public class Embrace : IEmbraceUnityApi
     {
         public IEmbraceProvider Provider;
-        
+        public EmbraceBehavior _embraceBehavior;
+
         internal EmbraceLogHandler EmbraceLogHandler;
+        internal static Embrace _instance;
         
-        private static Embrace _instance;
         private static EmbraceSdkInfo sdkInfo;
         private bool _started;
         private Dictionary<string, string> _emptyDictionary = new Dictionary<string, string>();
         private EmbraceThreadService _threadService;
-        private EmbraceScenesToViewReporter _scenesToViewReporter;
 
         /// <inheritdoc />
         public bool IsStarted => _started;
@@ -39,50 +39,8 @@ namespace EmbraceSDK
                 {
                     return _instance;
                 }
-
-                #if UNITY_2022_3_OR_NEWER
-                Embrace embrace = FindAnyObjectByType<Embrace>();
-                #else
-                Embrace embrace = FindObjectOfType<Embrace>();
-                #endif
-                if (embrace == null)
-                {
-                    var go = new GameObject { name = "Embrace" };
-                    embrace = go.AddComponent<Embrace>();
-                    DontDestroyOnLoad(go);
-                }
                 
-                embrace.Initialize();
-                return embrace;
-            }
-        }
-
-        void OnApplicationPause(bool pauseStatus)
-        {
-            if (!pauseStatus) {
-                Provider.InstallUnityThreadSampler();
-#if UNITY_ANDROID
-                // The behaviors of the native Android SDK and the native iOS SDK have been
-                // demonstrated to be different. Namely, the iOS SDK perpetuates the views
-                // as expected when returning from a long-pause (long enough to create a new session)
-                // However, the Android SDK does not do so and instead loses that information, instead
-                // capturing the Unity activity and possibly a test view label "a_view" as well.
-                // As a result, the StartView and EndView clauses here should forcibly capture
-                // the view information we need for this feature.
-                _scenesToViewReporter?.StartViewFromScene(SceneManager.GetActiveScene());
-                    
-#if EMBRACE_ENABLE_BUGSHAKE_FORM
-                // We should attempt to register the shake listener whenever the app is resumed
-                // Because the internal behavior of the Android SDK is such that it contains a ShakeListener singleton
-                // we will not cause issues by registering it multiple times.
-                BugshakeService.Instance.RegisterShakeListener();
-#endif
-#endif
-            } else
-            {
-#if UNITY_ANDROID
-                _scenesToViewReporter?.EndViewFromScene(SceneManager.GetActiveScene());
-#endif
+                return new Embrace();
             }
         }
 
@@ -93,36 +51,21 @@ namespace EmbraceSDK
         /// <returns></returns>
         public static Embrace Create()
         {
-            #if UNITY_2022_3_OR_NEWER
-            var embraceInstance = FindObjectOfType<Embrace>();
-            #else
-            var embraceInstance = FindObjectOfType<Embrace>();
-            #endif
-            if (embraceInstance != null)
-            {
-                DestroyImmediate(embraceInstance.gameObject);
-            }
-
-            var go = new GameObject { name = "Embrace" };
-            embraceInstance = go.AddComponent<Embrace>();
-
             TextAsset targetFile = Resources.Load<TextAsset>("Info/EmbraceSdkInfo");
             sdkInfo = JsonUtility.FromJson<EmbraceSdkInfo>(targetFile.text);
-            embraceInstance.Provider = new Embrace_Stub();
-            _instance = embraceInstance;
+            Instance.Provider = new Embrace_Stub();
+            _instance = Instance;
             
             InternalEmbrace.SetInternalInstance(_instance);
 
-            return embraceInstance;
+            return _instance;
         }
 
         /// <summary>
         /// Initializes core SDK parameters and instantiates a platform specific provider.
         /// </summary>
-        private void Initialize()
+        internal void Initialize()
         {
-            _instance = this;
-
             // Set the main thread for the Embrace SDK
             _threadService = new EmbraceThreadService(Thread.CurrentThread, EmbraceLogHandler);
             
@@ -133,9 +76,9 @@ namespace EmbraceSDK
             sdkInfo = JsonUtility.FromJson<EmbraceSdkInfo>(targetFile.text);
 
 #if UNITY_ANDROID && !UNITY_EDITOR
-            provider = new Embrace_Android();
+            Provider = new Embrace_Android();
 #elif (UNITY_IOS || UNITY_TVOS) && !UNITY_EDITOR
-            provider = new Embrace_iOS();
+            Provider = new Embrace_iOS();
 #else
             Provider = new Embrace_Stub();
 #endif
@@ -164,32 +107,6 @@ namespace EmbraceSDK
 #endif
             
             Provider.InitializeSDK();
-        }
-        
-        // Called by Unity runtime
-        private void Start()
-        {
-            // If some other Game Object gets added to the scene that has an Embrace
-            // component that doesn't match our singleton then get rid of it...
-            if (_instance && _instance != this)
-            {
-                Destroy(gameObject);
-            }
-            else if (_instance == null)
-            {
-                // ...otherwise if the singleton instance is null, invoke Initialize() to create it.
-                // This scenario is likely to occur if a user adds the Embrace Monobehaviour to a
-                // game object in a startup scene, but doesn't invoke the StartSDK() method through
-                // the singleton instance until later in the application's startup process.
-                Initialize();
-                DontDestroyOnLoad(gameObject);
-            }
-        }
-
-        // Called by Unity runtime
-        private void OnDestroy()
-        {
-            _scenesToViewReporter?.Dispose();
         }
 
         /// <inheritdoc />
@@ -682,7 +599,7 @@ namespace EmbraceSDK
         public void RecordPushNotification(iOSPushNotificationArgs iosArgs)
         {
             #if UNITY_IOS
-            provider.RecordPushNotification(iosArgs);
+            Provider.RecordPushNotification(iosArgs);
             #else
             EmbraceLogger.LogError("Attempting to record iOS push notification on non-iOS platform");
             #endif
