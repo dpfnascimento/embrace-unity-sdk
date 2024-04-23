@@ -14,22 +14,26 @@ namespace EmbraceSDK.EditorView
         public const int AppIDLength = 5;
         public const int ApiTokenLength = 32;
 
+        public static Regex IDRegex
+        {
+            get;
+        } = new Regex(@"[A-Za-z0-9]{5}");
+
+        public static Regex TokenRegex
+        {
+            get;
+        } = new Regex(@"[A-Za-z0-9]{32}");
+
         public static bool ValidateID(string input)
         {
             if (input.Length != AppIDLength || string.IsNullOrEmpty(input)) return false;
-
-            Regex regex = new Regex(@"[A-Za-z0-9]{5}");
-
-            return regex.IsMatch(input);
+            return IDRegex.IsMatch(input);
         }
 
         public static bool ValidateToken(string input)
         {
             if (input.Length != ApiTokenLength || string.IsNullOrEmpty(input)) return false;
-
-            Regex regex = new Regex(@"[A-Za-z0-9]{32}");
-
-            return regex.IsMatch(input);
+            return TokenRegex.IsMatch(input);
         }
 
         public static void ValidateConfiguration(EmbraceConfiguration config)

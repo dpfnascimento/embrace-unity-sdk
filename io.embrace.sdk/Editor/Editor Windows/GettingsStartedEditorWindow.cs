@@ -38,10 +38,35 @@ namespace EmbraceSDK.EditorView
 
         private static GUIContentLibrary guiContentLibrary = new GUIContentLibrary();
 
-        private static (GUIContent content, GUIStyle style) GetContentTuple(GUIContentLibrary.GUIContentIdentifier identifier)
-        {
-            return guiContentLibrary.GetContentTuple(identifier, styleConfigs);
-        }
+        private static (GUIContent content, GUIStyle style) GetContentTuple(GUIContentLibrary.GUIContentIdentifier identifier) => 
+            guiContentLibrary.GetContentTuple(identifier, styleConfigs);
+
+        private bool hasCompletedFirstValidation;
+        
+        private bool doesBaseProjectTemplateExists;
+        private bool doesLauncherTemplateExists;
+        private bool doesGradlePropertiesTemplateExists;
+        
+        #if UNITY_2022_2_OR_NEWER
+        private bool doesSettingsTemplateExists;
+        #endif
+
+        private bool templatesPresent;
+        
+        private bool baseProjectTemplateValid;
+        private bool launcherTemplateValid;
+        private bool gradlePropertiesValid;
+                
+        #if UNITY_2022_2_OR_NEWER
+        private bool settingsTemplateValid;
+        #else
+        private bool allRepositoriesValid;
+        #endif
+
+        private bool foundImport;
+
+        private bool foundAndroidX;
+        private bool foundJetifier;
 
         [MenuItem("Tools/Embrace/Getting Started")]
         public static void Init()
@@ -382,19 +407,24 @@ namespace EmbraceSDK.EditorView
             {
                 GUILayout.Space(styleConfigs.space);
 
-                //Cache the paths to the templates.
-                var doesBaseProjectTemplateExists = File.Exists(EmbraceGradleUtility.BaseProjectTemplatePath);
-                var doesLauncherTemplateExists = File.Exists(EmbraceGradleUtility.LauncherTemplatePath);
-                var doesGradlePropertiesTemplateExists = File.Exists(EmbraceGradleUtility.GradlePropertiesPath);
-
-                var templatesPresent = doesBaseProjectTemplateExists
-                                       && doesLauncherTemplateExists
-                                       && doesGradlePropertiesTemplateExists;
+                var updateValidation = GUILayout.Button("Run Gradle File Validation?");
                 
-                #if UNITY_2022_2_OR_NEWER
-                var doesSettingsTemplateExists = File.Exists(EmbraceGradleUtility.SettingsTemplatePath);
-                templatesPresent &= doesSettingsTemplateExists;
-                #endif
+                GUILayout.Space(styleConfigs.space);
+
+                if (updateValidation || !hasCompletedFirstValidation)
+                {
+                    doesBaseProjectTemplateExists = File.Exists(EmbraceGradleUtility.BaseProjectTemplatePath);
+                    doesLauncherTemplateExists = File.Exists(EmbraceGradleUtility.LauncherTemplatePath);
+                    doesGradlePropertiesTemplateExists = File.Exists(EmbraceGradleUtility.GradlePropertiesPath);
+
+                    templatesPresent = doesBaseProjectTemplateExists && doesLauncherTemplateExists &&
+                                       doesGradlePropertiesTemplateExists;
+                    
+                    #if UNITY_2022_2_OR_NEWER
+                    doesSettingsTemplateExists = File.Exists(EmbraceGradleUtility.SettingsTemplatePath);
+                    templatesPresent &= doesSettingsTemplateExists;
+                    #endif
+                }
 
                 if (!templatesPresent)
                 {
@@ -431,26 +461,23 @@ namespace EmbraceSDK.EditorView
                 }
 
                 GUILayout.Toggle(templatesPresent, "Required Android Templates Present");
-                
-                // Validate each file as necessary
-                var baseProjectTemplateValid = false;
-                var launcherTemplateValid = false;
-                var gradlePropertiesValid = false;
-                
-                #if UNITY_2022_2_OR_NEWER
-                var settingsTemplateValid = false;
-                #endif
 
                 if (doesBaseProjectTemplateExists)
                 {
-                    #if !UNITY_2022_2_OR_NEWER
-                    // Validate Base Project Template
-                    var (foundImport, allRepositoriesValid) = 
-                        AndroidBaseProjectTemplateValidator.Validate(EmbraceGradleUtility.BaseProjectTemplatePath);
-                    #else
-                    // Validate Base Project Template
-                    var foundImport = AndroidBaseProjectTemplateValidator.Validate(EmbraceGradleUtility.BaseProjectTemplatePath);
-                    #endif
+                    if (updateValidation || !hasCompletedFirstValidation)
+                    {
+                        #if !UNITY_2022_2_OR_NEWER
+                        // Validate Base Project Template
+                        var (fI, aRV) = 
+                            AndroidBaseProjectTemplateValidator.Validate(EmbraceGradleUtility.BaseProjectTemplatePath);
+                        foundImport = fI;
+                        allRepositoriesValid = aRV;
+                        #else
+                        // Validate Base Project Template
+                        foundImport = AndroidBaseProjectTemplateValidator.Validate(EmbraceGradleUtility.BaseProjectTemplatePath);
+                        #endif
+                    }
+                    
 
                     if (!foundImport)
                     {
@@ -476,8 +503,11 @@ namespace EmbraceSDK.EditorView
                 #if UNITY_2022_2_OR_NEWER
                 if (doesSettingsTemplateExists)
                 {
-                    // Validate Settings Template
-                    settingsTemplateValid = AndroidSettingsTemplateValidator.Validate(EmbraceGradleUtility.SettingsTemplatePath);
+                    if (updateValidation || !hasCompletedFirstValidation)
+                    {
+                        // Validate Settings Template
+                        settingsTemplateValid = AndroidSettingsTemplateValidator.Validate(EmbraceGradleUtility.SettingsTemplatePath);    
+                    }
 
                     if (!settingsTemplateValid)
                     {
@@ -490,8 +520,11 @@ namespace EmbraceSDK.EditorView
 
                 if (doesLauncherTemplateExists)
                 {
-                    // Validate Launcher Template 
-                    launcherTemplateValid = AndroidLauncherTemplateValidator.Validate(EmbraceGradleUtility.LauncherTemplatePath);
+                    if (updateValidation || !hasCompletedFirstValidation)
+                    {
+                        // Validate Launcher Template 
+                        launcherTemplateValid = AndroidLauncherTemplateValidator.Validate(EmbraceGradleUtility.LauncherTemplatePath);
+                    }
 
                     if (!launcherTemplateValid)
                     {
@@ -503,8 +536,14 @@ namespace EmbraceSDK.EditorView
 
                 if (doesGradlePropertiesTemplateExists)
                 {
-                    // Validate Gradle Properties Template
-                    var (foundAndroidX, foundJetifier) = AndroidGradlePropertiesTemplateValidator.Validate(EmbraceGradleUtility.GradlePropertiesPath);
+                    if (updateValidation || !hasCompletedFirstValidation)
+                    {
+                        // Validate Gradle Properties Template
+                        var (fAx, fJ) = AndroidGradlePropertiesTemplateValidator.Validate(EmbraceGradleUtility.GradlePropertiesPath);
+                        foundAndroidX = fAx;
+                        foundJetifier = fJ;
+                    }
+                    
 
                     if (!foundAndroidX)
                     {
@@ -532,6 +571,11 @@ namespace EmbraceSDK.EditorView
             }
 
             GUILayout.EndVertical();
+
+            if (!hasCompletedFirstValidation)
+            {
+                hasCompletedFirstValidation = true;
+            }
         }
 
         [UnityEngine.TestTools.ExcludeFromCoverage]
