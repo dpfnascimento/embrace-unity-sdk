@@ -17,10 +17,12 @@ namespace EmbraceSDK
     public class Embrace : IEmbraceUnityApi
     {
         public IEmbraceProvider Provider;
-        public EmbraceBehavior _embraceBehavior;
+        // EmbraceBehavior is used for specific functions like tracking scenes.
+        public EmbraceBehavior EmbraceBehavior;
 
         internal EmbraceLogHandler EmbraceLogHandler;
-        internal static Embrace _instance;
+        
+        private static Embrace _instance;
         
         private static EmbraceSdkInfo sdkInfo;
         private bool _started;
@@ -40,7 +42,10 @@ namespace EmbraceSDK
                     return _instance;
                 }
                 
-                return new Embrace();
+                var embrace = new Embrace();
+                embrace.Initialize();
+                
+                return embrace;
             }
         }
 
@@ -51,26 +56,30 @@ namespace EmbraceSDK
         /// <returns></returns>
         public static Embrace Create()
         {
+            var embrace = new Embrace();
+            embrace.Initialize();
+            
             TextAsset targetFile = Resources.Load<TextAsset>("Info/EmbraceSdkInfo");
             sdkInfo = JsonUtility.FromJson<EmbraceSdkInfo>(targetFile.text);
-            Instance.Provider = new Embrace_Stub();
-            _instance = Instance;
+            embrace.Provider = new Embrace_Stub();
             
-            InternalEmbrace.SetInternalInstance(_instance);
+            InternalEmbrace.SetInternalInstance(embrace);
 
-            return _instance;
+            return embrace;
         }
 
         /// <summary>
         /// Initializes core SDK parameters and instantiates a platform specific provider.
         /// </summary>
-        internal void Initialize()
+        private void Initialize()
         {
-            // Set the main thread for the Embrace SDK
-            _threadService = new EmbraceThreadService(Thread.CurrentThread, EmbraceLogHandler);
+            _instance = this;
             
             // Init the Embrace log handler
             EmbraceLogHandler = new EmbraceLogHandler();
+            
+            // Set the main thread for the Embrace SDK
+            _threadService = new EmbraceThreadService(Thread.CurrentThread, EmbraceLogHandler);
             
             TextAsset targetFile = Resources.Load<TextAsset>("Info/EmbraceSdkInfo");
             sdkInfo = JsonUtility.FromJson<EmbraceSdkInfo>(targetFile.text);
@@ -105,7 +114,6 @@ namespace EmbraceSDK
             // For now we will enable this by default.
             BugshakeService.Instance.RegisterShakeListener();
 #endif
-            
             Provider.InitializeSDK();
         }
 
@@ -132,8 +140,8 @@ namespace EmbraceSDK
 
             // Scene change registration here
 #if EMBRACE_AUTO_CAPTURE_ACTIVE_SCENE_AS_VIEW
-            scenesToViewReporter = new EmbraceScenesToViewReporter();
-            scenesToViewReporter.StartViewFromScene(SceneManager.GetActiveScene());
+            EmbraceBehavior = EmbraceBehavior.Create();
+            EmbraceBehavior.TrackCurrentScene();
 #endif
 
 #if EMBRACE_USE_THREADING

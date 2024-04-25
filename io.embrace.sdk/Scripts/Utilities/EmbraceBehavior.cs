@@ -1,5 +1,4 @@
 using EmbraceSDK.Internal;
-using UnityEditor.VersionControl;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -7,33 +6,24 @@ namespace EmbraceSDK
 {
     public class EmbraceBehavior: MonoBehaviour
     {
-        private static EmbraceBehavior _instance;
         private EmbraceScenesToViewReporter _scenesToViewReporter;
         
-        public static EmbraceBehavior Instance
+        public static EmbraceBehavior Create()
         {
-            get
-            {
-                // Only initialize in a built player or Play Mode in the Editor
-                if (_instance != null || !Application.isPlaying)
-                {
-                    return _instance;
-                }
-
 #if UNITY_2022_3_OR_NEWER
-                EmbraceBehavior embrace = FindAnyObjectByType<EmbraceBehavior>();
+            var embraceBehavior = FindAnyObjectByType<EmbraceBehavior>();
 #else
-                EmbraceBehavior embraceBehavior = FindObjectOfType<EmbraceBehavior>();
+            var embraceBehavior = FindObjectOfType<EmbraceBehavior>();
 #endif
-                if (embraceBehavior == null)
-                {
-                    var go = new GameObject { name = "Embrace" };
-                    embraceBehavior = go.AddComponent<EmbraceBehavior>();
-                    DontDestroyOnLoad(go);
-                }
-                
-                return embraceBehavior;
+            if (embraceBehavior != null)
+            {
+                DestroyImmediate(embraceBehavior.gameObject);
             }
+
+            var go = new GameObject { name = "Embrace" };
+            go.AddComponent<EmbraceBehavior>();
+
+            return embraceBehavior;
         }
         
         void OnApplicationPause(bool pauseStatus)
@@ -72,18 +62,13 @@ namespace EmbraceSDK
         {
             // If some other Game Object gets added to the scene that has an Embrace
             // component that doesn't match our singleton then get rid of it...
-            if (Embrace.Instance._embraceBehavior != this)
+            if (Embrace.Instance.EmbraceBehavior != this)
             {
                 Destroy(gameObject);
             }
             else
             {
-                // ...otherwise if the singleton instance is null, invoke Initialize() to create it.
-                // This scenario is likely to occur if a user adds the Embrace Monobehaviour to a
-                // game object in a startup scene, but doesn't invoke the StartSDK() method through
-                // the singleton instance until later in the application's startup process.
-                Embrace.Instance._embraceBehavior = this;
-                Embrace.Instance.Initialize();
+                //Embrace.Instance.Initialize(); TODO: review if this is necessary...
                 DontDestroyOnLoad(gameObject);
             }
         }
@@ -95,21 +80,15 @@ namespace EmbraceSDK
             _scenesToViewReporter?.Dispose();
 #endif
         }
-        
-        public static void Create()
-        {
-#if UNITY_2022_3_OR_NEWER
-            var embraceInstance = FindObjectOfType<Embrace>();
-#else
-            var embraceInstance = FindObjectOfType<EmbraceBehavior>();
-#endif
-            if (embraceInstance != null)
-            {
-                DestroyImmediate(embraceInstance.gameObject);
-            }
 
-            var go = new GameObject { name = "Embrace" };
-            go.AddComponent<EmbraceBehavior>();
+        public void TrackCurrentScene()
+        {
+            if (_scenesToViewReporter == null)
+            {
+                _scenesToViewReporter = new EmbraceScenesToViewReporter();
+            }
+            
+            _scenesToViewReporter.StartViewFromScene(SceneManager.GetActiveScene());
         }
     }
 }
